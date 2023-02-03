@@ -84,6 +84,19 @@ module Data.Aeson.Types.Internal
     , DotNetTime(..)
     ) where
 
+#ifdef ghcjs_HOST_OS
+import Control.Monad (forM, liftM)
+import Control.Monad.Trans.Maybe (MaybeT (..))
+import qualified Data.JSString.Text as JSS
+import Data.Scientific (scientific, fromFloatDigits)
+import GHCJS.Foreign.Internal (JSONType (..), jsNull, toJSBool, jsonTypeOf)
+import GHCJS.Marshal (FromJSVal (..), ToJSVal (..))
+import GHCJS.Marshal.Pure (pToJSVal)
+import GHCJS.Types (JSVal)
+import qualified JavaScript.Array.Internal as AI
+import qualified JavaScript.Object.Internal as OI
+#endif
+
 import Prelude.Compat
 
 import Control.Applicative (Alternative(..))
@@ -931,3 +944,40 @@ camelTo2 c = map toLower . go2 . go1
           go2 "" = ""
           go2 (l:u:xs) | isLower l && isUpper u = l : c : u : go2 xs
           go2 (x:xs) = x : go2 xs
+
+#ifdef ghcjs_HOST_OS
+instance FromJSVal Value where
+  fromJSVal r = case jsonTypeOf r of
+    JSONNull    -> return (Just Null)
+    JSONInteger -> liftM (Number . flip scientific 0 . (toInteger :: Int -> Integer))
+         <$> fromJSVal r
+    JSONFloat   -> liftM (Number . (fromFloatDigits :: Double -> Scientific))
+         <$> fromJSVal r
+    JSONBool    -> liftM Bool  <$> fromJSVal r
+    JSONString  -> liftM String <$> fromJSVal r
+    JSONArray   -> liftM (Array . V.fromList) <$> fromJSVal r
+    JSONObject  -> do
+        props <- OI.listProps (OI.Object r)
+        runMaybeT $ do
+            propVals <- forM props $ \p -> do
+                v <- MaybeT (fromJSVal =<< OI.getProp p (OI.Object r))
+                return (Key.fromText (JSS.textFromJSString p), v)
+            return (Object (KM.fromList propVals))
+  {-# INLINE fromJSVal #-}
+
+instance ToJSVal Value where
+  toJSVal = convertValue
+    where
+      convertValue :: Value -> IO JSVal
+      convertValue Null       = return jsNull
+      convertValue (String t) = return (pToJSVal t)
+      convertValue (Array a)  = (\(AI.SomeJSArray x) -> x) <$>
+                                   (AI.fromListIO =<< mapM convertValue (V.toList a))
+      convertValue (Number n) = toJSVal (realToFrac n :: Double)
+      convertValue (Bool b)   = return (toJSBool b)
+      convertValue (Object o) = do
+        obj@(OI.Object obj') <- OI.create
+        mapM_ (\(k,v) -> convertValue v >>= \v' -> OI.setProp (JSS.textToJSString (Key.toText k)) v' obj) (KM.toList o)
+        return obj'
+  {-# INLINE toJSVal #-}
+#endif

@@ -2,6 +2,12 @@
 {-# LANGUAGE CPP          #-}
 {-# LANGUAGE MultiWayIf   #-}
 
+{-# LANGUAGE MagicHash #-}
+{-# LANGUAGE UnliftedFFITypes #-}
+#ifdef ghcjs_HOST_OS
+{-# LANGUAGE ForeignFunctionInterface, UnliftedFFITypes, JavaScriptFFI, GHCForeignImportPrim #-}
+#endif
+
 module Data.Aeson.Parser.UnescapePure
   ( unescapeText
   ) where
@@ -18,7 +24,9 @@ import           Foreign.Ptr              (Ptr, plusPtr)
 import           Foreign.Storable         (peek)
 
 import qualified Data.Primitive           as P
+#ifndef ghcjs_HOST_OS
 import qualified Data.Text.Array          as T
+#endif
 import qualified Data.Text.Internal       as T
 
 import Data.Aeson.Internal.ByteString
@@ -27,6 +35,10 @@ import Data.Aeson.Internal.ByteString
 import           Data.Word                (Word16)
 #endif
 
+#ifdef ghcjs_HOST_OS
+import Data.JSString (JSString)
+import GHC.Exts (ByteArray#, Int#, Int(..))
+#endif
 
 unescapeText :: ByteString -> Either UnicodeException Text
 unescapeText = unsafeDupablePerformIO . try . unescapeTextIO
@@ -693,12 +705,16 @@ unescapeTextIO bs = withBS bs $ \fptr len ->
                | otherwise -> throwDecodeError
 
         state_start :: Int -> Ptr Word8 -> IO Text
-        state_start !out !inp
+        state_start !out@(I# out') !inp
           | inp == end = do
             P.shrinkMutablePrimArray arr out
             frozenArr <- P.unsafeFreezePrimArray arr
             return $ case frozenArr of
+#ifdef ghcjs_HOST_OS
+              P.PrimArray ba -> let !(I# cero) = 0 in T.Text (js_textToJSString ba cero out')
+#else
               P.PrimArray ba -> T.Text (T.Array ba) 0 out
+#endif
 
           | otherwise = do
             w8 <- peek inp
@@ -716,4 +732,10 @@ unescapeTextIO bs = withBS bs $ \fptr len ->
     -- start the state machine
     state_start (0 :: Int) begin
 
+#endif
+
+#ifdef ghcjs_HOST_OS
+foreign import javascript unsafe
+  "h$textToString"
+  js_textToJSString :: ByteArray# -> Int# -> Int# -> JSString
 #endif

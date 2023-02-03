@@ -134,6 +134,9 @@ library
 
   ghc-options:      -Wall
 
+  if impl(ghcjs)
+    build-depends: ghcjs-base, transformers
+
   if (impl(ghcjs) || !flag(cffi))
     hs-source-dirs: src-pure
     other-modules:  Data.Aeson.Parser.UnescapePure
